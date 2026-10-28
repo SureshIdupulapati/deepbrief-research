@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: runs
+    description: Research pipeline runs
 paths:
   /healthz:
     get:
@@ -24,6 +26,110 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /runs:
+    get:
+      operationId: listRuns
+      tags: [runs]
+      summary: List recent research runs
+      responses:
+        "200":
+          description: Saved runs, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ResearchRun"
+    post:
+      operationId: createRun
+      tags: [runs]
+      summary: Start a research pipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunInput"
+      responses:
+        "202":
+          description: Pipeline accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchRun"
+  /runs/{runId}:
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Get a run and its checkpoints
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Run details and stage checkpoints
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+        "404":
+          description: Run not found
+  /runs/{runId}/resume:
+    post:
+      operationId: resumeRun
+      tags: [runs]
+      summary: Resume a halted pipeline from its latest checkpoint
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Pipeline resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchRun"
+        "409":
+          description: Run is not resumable
+        "404":
+          description: Run not found
+  /runs/{runId}/events/{afterId}:
+    get:
+      operationId: streamRunEvents
+      tags: [runs]
+      summary: Stream run state transitions using server-sent events
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: afterId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: SSE stream; each message has an id, event name, and JSON data
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: Run not found
 components:
   schemas:
     HealthStatus:
@@ -33,4 +139,88 @@ components:
           type: string
       required:
         - status
+    RunInput:
+      type: object
+      properties:
+        topic:
+          type: string
+          minLength: 8
+          maxLength: 280
+        injectRateLimit:
+          type: boolean
+        injectOutage:
+          type: boolean
+        crashAtStage4:
+          type: boolean
+      required: [topic]
+    ResearchRun:
+      type: object
+      properties:
+        id:
+          type: string
+        topic:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, paused, completed, failed]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: ["string", "null"]
+          format: date-time
+        completedStages:
+          type: integer
+        durationMs:
+          type: ["integer", "null"]
+        injectRateLimit:
+          type: boolean
+        injectOutage:
+          type: boolean
+        crashAtStage4:
+          type: boolean
+      required: [id, topic, status, createdAt, updatedAt, completedStages, injectRateLimit, injectOutage, crashAtStage4]
+    StageCheckpoint:
+      type: object
+      properties:
+        stage:
+          type: integer
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, retrying, fallback, completed, failed]
+        durationMs:
+          type: ["integer", "null"]
+        attempts:
+          type: integer
+        output:
+          type: ["object", "null"]
+          additionalProperties: true
+        inputContext:
+          type: ["object", "null"]
+          additionalProperties: true
+        resiliencePolicy:
+          type: string
+        message:
+          type: ["string", "null"]
+      required: [stage, name, status, attempts, resiliencePolicy]
+    RunDetail:
+      allOf:
+        - $ref: "#/components/schemas/ResearchRun"
+        - type: object
+          properties:
+            stages:
+              type: array
+              items:
+                $ref: "#/components/schemas/StageCheckpoint"
+            dossier:
+              type: ["object", "null"]
+              additionalProperties: true
+            verificationHash:
+              type: ["string", "null"]
+          required: [stages]
 

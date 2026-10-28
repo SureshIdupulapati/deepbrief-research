@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "DeepBrief"
+description = "A research pipeline that makes its work visible: run and resume source verification with live stage updates, resilience controls, and a shareable executive dossier."
+version = "1.0.0"
+id = "artifacts/deepbrief"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23751
+
+[services.development]
+run = "pnpm --filter @workspace/deepbrief run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/deepbrief", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/deepbrief/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23751"
+BASE_PATH = "/"

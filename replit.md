@@ -1,44 +1,50 @@
-# [Project name]
+# DeepBrief
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+DeepBrief makes a technical research pipeline visible, resumable, and auditable, then packages its checkpoints into an executive dossier.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- API: `uv run python artifacts/api-server/main.py` (FastAPI; workflow supplies port 8080)
+- Web: `pnpm --filter @workspace/deepbrief run dev`
+- Resilience suite: `python -m unittest discover -s artifacts/api-server/tests -v`
+- Typecheck: `pnpm run typecheck`
+- Regenerate API client after OpenAPI changes: `pnpm --filter @workspace/api-spec run codegen`
+- Optional database path override: `DEEPBRIEF_DB`; default is `artifacts/api-server/deepbrief.sqlite3`
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- pnpm workspace, Node.js 24, TypeScript 5.9, Python 3.13
+- API: FastAPI and Uvicorn
+- Persistence: SQLite in WAL mode
+- Frontend: Vite with native HTML, CSS, and JavaScript ES modules
+- API contract: OpenAPI with Orval-generated client types
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/main.py` — pipeline orchestration, API routes, SQLite checkpoints, SSE
+- `artifacts/api-server/tests/test_resilience.py` — backoff, fallback, clean-run, and resume tests
+- `artifacts/deepbrief/src/main.js` — workspace UI, live graph, inspector, dossier, and run history
+- `artifacts/deepbrief/src/index.css` — interface theme and responsive styles
+- `lib/api-spec/openapi.yaml` — API contract source of truth
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Every stage output and run transition is saved in SQLite; SSE event IDs support replay and reconnect.
+- A resumed run skips completed checkpoints and starts at the first incomplete stage.
+- Fault injection uses deterministic demo source fixtures. The dossier labels these as illustrative, not live external research.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Users can launch a six-stage research run, watch live state changes and timings, inspect stage inputs/outputs/policies, inject retry/outage/crash conditions, resume from persisted checkpoints, and export a signed Markdown dossier or copyable team card.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+The user requested a dark developer-oriented interface with a live DAG and resilience demonstrations.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- API paths include `/api` because the shared proxy forwards the full path unchanged.
+- Keep frontend named SSE listeners synchronized with event names emitted by the API.
 
 ## Pointers
 
