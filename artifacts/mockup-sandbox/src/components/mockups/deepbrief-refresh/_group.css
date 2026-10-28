@@ -1,0 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+
+:root {
+  color-scheme: dark;
+  --background: 222 28% 9%;
+  --foreground: 218 24% 91%;
+  --border: 220 18% 20%;
+  --input: 220 18% 23%;
+  --card: 222 24% 12%;
+  --card-foreground: 218 24% 91%;
+  --primary: 249 84% 70%;
+  --primary-foreground: 230 30% 10%;
+  --secondary: 222 19% 17%;
+  --secondary-foreground: 218 20% 83%;
+  --muted: 222 19% 16%;
+  --muted-foreground: 218 11% 58%;
+  --accent: 249 72% 22%;
+  --accent-foreground: 250 100% 88%;
+  --destructive: 2 68% 62%;
+  --ring: 249 84% 70%;
+  --app-font-sans: 'DM Sans', sans-serif;
+  --app-font-display: 'Manrope', sans-serif;
+  --app-font-mono: 'DM Mono', monospace;
+  --radius: .75rem;
+  --elevate-1: rgba(255,255,255,.035);
+  --elevate-2: rgba(255,255,255,.07);
+}
+
+.dark { color-scheme: dark; }
+
+:root {
+  --bg-deep: #10131b;
+  --panel: #171b25;
+  --panel-raised: #1c212d;
+  --line: #2a3040;
+  --line-soft: rgba(158, 169, 194, .13);
+  --text: #e6e9f1;
+  --subtext: #8d96aa;
+  --violet: #9788ff;
+  --cyan: #70d4cf;
+  --green: #72d3a1;
+  --amber: #e8b66f;
+  --red: #e17f83;
+}

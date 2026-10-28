@@ -1,4 +1,5 @@
 import './index.css';
+import './deepbrief-theme.css';
 
 const root = document.querySelector('#root');
 const stageNames = [
