@@ -6,12 +6,21 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './evidenceRecord';
 export * from './healthStatus';
+export * from './providerStatus';
+export * from './providerStatusStatus';
+export * from './researchDossier';
+export * from './researchDossierFindingsItem';
+export * from './researchDossierSourceMode';
 export * from './researchRun';
+export * from './researchRunSourceMode';
+export * from './researchRunSourcesItem';
 export * from './researchRunStatus';
 export * from './runDetail';
-export * from './runDetailDossier';
 export * from './runInput';
+export * from './runInputSourceMode';
+export * from './runInputSourcesItem';
 export * from './stageCheckpoint';
 export * from './stageCheckpointInputContext';
 export * from './stageCheckpointOutput';

@@ -2,20 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
 import os
 import random
+import re
 import sqlite3
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, Header, HTTPException, Path as RoutePath
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,19 +29,19 @@ DB_PATH = Path(os.environ.get("DEEPBRIEF_DB", str(ROOT / "deepbrief.sqlite3")))
 
 STAGES = [
     ("Input Normalizer & Intent Expansion", "Validates the brief and expands it into orthogonal research vectors."),
-    ("Multi-Source Harvester", "Collects parallel evidence from standards, benchmark labs, and incident reports."),
-    ("DOM Sanitizer & Content Distiller", "Removes boilerplate and extracts comparable numeric evidence."),
-    ("Cross-Source Fact Corroborator", "Aligns claims, scores agreement, and marks single-source caveats."),
-    ("Intelligence Synthesizer", "Builds the executive summary, architectural findings, and action plan."),
+    ("Multi-Source Harvester", "Searches selected live publication providers or loads explicitly selected demo fixtures."),
+    ("Evidence Normalizer", "Preserves provider records and abstracts without inventing extracted metrics."),
+    ("Claim Linkage & Caveat Review", "Links findings to source records and avoids unsupported consensus claims."),
+    ("Evidence-Led Summary", "Summarizes retrieved records and states the limits of the evidence."),
     ("Artifact Builder & Cryptographic Signer", "Compiles the dossier, team card, and SHA-256 signature."),
 ]
 
 POLICIES = [
     "Input validation; bounded expansion",
-    "Three retries with exponential backoff; circuit-breaker fallback",
-    "Idempotent normalization checkpoint",
-    "Require independent evidence; flag uncorroborated claims",
-    "Synthesize only from saved evidence",
+    "Parallel selected-provider retrieval; no fixture fallback in live mode",
+    "Preserve source URL, title, retrieval time, and claim linkage",
+    "Link each finding to evidence; do not infer cross-source agreement",
+    "Summarize only saved evidence and disclose its limits",
     "Deterministic Markdown build; SHA-256 integrity hash",
 ]
 
@@ -82,6 +88,8 @@ def initialize_database() -> None:
                 inject_outage INTEGER NOT NULL DEFAULT 0,
                 crash_at_stage4 INTEGER NOT NULL DEFAULT 0,
                 resume_count INTEGER NOT NULL DEFAULT 0,
+                source_mode TEXT NOT NULL DEFAULT 'fixtures',
+                source_selection_json TEXT NOT NULL DEFAULT '[]',
                 dossier_json TEXT,
                 verification_hash TEXT
             );
@@ -110,6 +118,11 @@ def initialize_database() -> None:
                 ON run_events(run_id, id);
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+        if "source_mode" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'fixtures'")
+        if "source_selection_json" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN source_selection_json TEXT NOT NULL DEFAULT '[]'")
         interrupted = conn.execute(
             "SELECT id FROM runs WHERE status IN ('queued', 'running')"
         ).fetchall()
@@ -138,9 +151,24 @@ def initialize_database() -> None:
 
 class RunInput(BaseModel):
     topic: str = Field(min_length=8, max_length=280)
+    sourceMode: Literal["live", "fixtures"] = "live"
+    sources: list[Literal["crossref", "arxiv"]] = Field(default_factory=lambda: ["crossref", "arxiv"], max_length=2)
     injectRateLimit: bool = False
     injectOutage: bool = False
     crashAtStage4: bool = False
+
+    @field_validator("sources")
+    @classmethod
+    def unique_sources(cls, sources: list[str]) -> list[str]:
+        if len(sources) != len(set(sources)):
+            raise ValueError("Choose each research source only once.")
+        return sources
+
+    @model_validator(mode="after")
+    def validate_source_mode(self) -> "RunInput":
+        if self.sourceMode == "live" and not self.sources:
+            raise ValueError("Select at least one live research source.")
+        return self
 
 
 def decode_json(value: str | None) -> Any:
@@ -160,6 +188,8 @@ def serialize_run(row: sqlite3.Row) -> dict[str, Any]:
         "injectRateLimit": bool(row["inject_rate_limit"]),
         "injectOutage": bool(row["inject_outage"]),
         "crashAtStage4": bool(row["crash_at_stage4"]),
+        "sourceMode": row["source_mode"],
+        "sources": decode_json(row["source_selection_json"]) or [],
     }
 
 
@@ -269,33 +299,195 @@ def read_run_row(run_id: str) -> sqlite3.Row:
     return row
 
 
-def evidence_for(topic: str, domain: str) -> list[dict[str, Any]]:
+def fixture_evidence_for(topic: str, domain: str) -> list[dict[str, Any]]:
+    retrieved_at = utc_now()
     return [
         {
+            "id": "fixture-standards",
             "source": "Demo fixture · standards archive",
+            "provider": "fixture",
             "type": "specification",
             "title": f"Operational requirements relevant to {domain}",
+            "url": "https://example.invalid/deepbrief-fixtures/standards",
+            "retrievedAt": retrieved_at,
+            "claimId": "fixture-claim-1",
             "claim": f"Operational limits should be defined and validated for {topic}.",
             "metric": "3 independent evidence classes",
             "confidence": 0.94,
         },
         {
+            "id": "fixture-benchmark",
             "source": "Demo fixture · benchmark lab",
+            "provider": "fixture",
             "type": "benchmark",
             "title": f"Controlled evaluation notes for {domain}",
+            "url": "https://example.invalid/deepbrief-fixtures/benchmark",
+            "retrievedAt": retrieved_at,
+            "claimId": "fixture-claim-2",
             "claim": "Measure the full request path, including retries and recovery.",
             "metric": "p95 latency and recovery rate",
             "confidence": 0.87,
         },
         {
+            "id": "fixture-incident",
             "source": "Demo fixture · incident archive",
+            "provider": "fixture",
             "type": "post-mortem",
             "title": f"Failure analysis patterns for {domain}",
+            "url": "https://example.invalid/deepbrief-fixtures/incidents",
+            "retrievedAt": retrieved_at,
+            "claimId": "fixture-claim-3",
             "claim": "Bounded retries and observable fallbacks reduce repeated outages.",
             "metric": "3 evidence classes",
             "confidence": 0.82,
         },
     ]
+
+
+SOURCE_LABELS = {"crossref": "Crossref", "arxiv": "arXiv"}
+
+
+def clean_abstract(value: str, limit: int = 1200) -> str:
+    text = re.sub(r"<[^>]*>", " ", html.unescape(value))
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def fetch_json(url: str) -> dict[str, Any]:
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "DeepBrief/1.0 (research evidence retrieval)",
+        },
+    )
+    with urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_xml(url: str) -> ET.Element:
+    request = Request(
+        url,
+        headers={"User-Agent": "DeepBrief/1.0 (research evidence retrieval)"},
+    )
+    with urlopen(request, timeout=15) as response:
+        return ET.fromstring(response.read())
+
+
+def search_crossref(topic: str) -> list[dict[str, Any]]:
+    params = urlencode(
+        {
+            "query.bibliographic": topic,
+            "rows": 5,
+            "select": "DOI,title,URL,published,author,abstract,container-title,type",
+        }
+    )
+    payload = fetch_json(f"https://api.crossref.org/works?{params}")
+    records = payload.get("message", {}).get("items", [])
+    evidence = []
+    for index, record in enumerate(records, start=1):
+        titles = record.get("title") or []
+        title = clean_abstract(str(titles[0])) if titles else ""
+        if not title:
+            continue
+        abstract = clean_abstract(str(record.get("abstract") or ""))
+        doi = record.get("DOI")
+        source_url = record.get("URL") or (f"https://doi.org/{doi}" if doi else None)
+        if not source_url:
+            continue
+        published = record.get("published") or record.get("published-print") or {}
+        date_parts = published.get("date-parts") or []
+        published_year = date_parts[0][0] if date_parts and date_parts[0] else None
+        evidence.append(
+            {
+                "id": f"crossref-{index}",
+                "source": "Crossref",
+                "provider": "crossref",
+                "type": str(record.get("type", "publication")),
+                "title": title,
+                "url": source_url,
+                "retrievedAt": utc_now(),
+                "claimId": f"claim-crossref-{index}",
+                "claim": abstract or f"Publication record relevant to the question: {title}",
+                "claimKind": "abstract" if abstract else "title metadata",
+                "published": published_year,
+            }
+        )
+    return evidence
+
+
+def search_arxiv(topic: str) -> list[dict[str, Any]]:
+    params = urlencode(
+        {
+            "search_query": f'all:"{topic}"',
+            "start": 0,
+            "max_results": 5,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        }
+    )
+    root = fetch_xml(f"https://export.arxiv.org/api/query?{params}")
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    evidence = []
+    for index, entry in enumerate(root.findall("atom:entry", ns), start=1):
+        title = clean_abstract(entry.findtext("atom:title", "", ns))
+        abstract = clean_abstract(entry.findtext("atom:summary", "", ns))
+        source_url = entry.findtext("atom:id", "", ns).strip()
+        if not title or not source_url:
+            continue
+        evidence.append(
+            {
+                "id": f"arxiv-{index}",
+                "source": "arXiv",
+                "provider": "arxiv",
+                "type": "preprint",
+                "title": title,
+                "url": source_url,
+                "retrievedAt": utc_now(),
+                "claimId": f"claim-arxiv-{index}",
+                "claim": abstract or f"Publication record relevant to the question: {title}",
+                "claimKind": "abstract" if abstract else "title metadata",
+                "published": entry.findtext("atom:published", "", ns)[:10] or None,
+            }
+        )
+    return evidence
+
+
+LIVE_SEARCHERS = {"crossref": search_crossref, "arxiv": search_arxiv}
+
+
+async def harvest_live(topic: str, selected_sources: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    loop = asyncio.get_running_loop()
+    results = await asyncio.gather(
+        *(
+            loop.run_in_executor(None, LIVE_SEARCHERS[source], topic)
+            for source in selected_sources
+        ),
+        return_exceptions=True,
+    )
+    evidence: list[dict[str, Any]] = []
+    provider_statuses: list[dict[str, str]] = []
+    for source, result in zip(selected_sources, results):
+        if isinstance(result, BaseException):
+            if isinstance(result, HTTPError):
+                reason = f"HTTP {result.code}"
+            elif isinstance(result, (TimeoutError, URLError)):
+                reason = "Request timed out or could not connect"
+            else:
+                reason = "The provider response could not be read"
+            provider_statuses.append(
+                {"provider": source, "label": SOURCE_LABELS[source], "status": "failed", "message": reason}
+            )
+            continue
+        evidence.extend(result)
+        provider_statuses.append(
+            {
+                "provider": source,
+                "label": SOURCE_LABELS[source],
+                "status": "completed" if result else "no_results",
+                "message": f"{len(result)} records retrieved" if result else "No matching records were returned",
+            }
+        )
+    return evidence, provider_statuses
 
 
 def infer_domain(topic: str) -> str:
@@ -319,6 +511,8 @@ async def run_pipeline(run_id: str) -> None:
         run = read_run_row(run_id)
         topic = run["topic"]
         domain = infer_domain(topic)
+        source_mode = run["source_mode"]
+        selected_sources = decode_json(run["source_selection_json"]) or []
         with connect() as conn:
             saved_stages = conn.execute(
                 "SELECT * FROM stage_checkpoints WHERE run_id = ? ORDER BY stage",
@@ -345,6 +539,8 @@ async def run_pipeline(run_id: str) -> None:
         context: dict[str, Any] = {
             "topic": topic,
             "domain": domain,
+            "sourceMode": source_mode,
+            "selectedSources": selected_sources,
             "priorOutputs": {
                 str(stage): item["output"]
                 for stage, item in previous.items()
@@ -445,73 +641,113 @@ async def run_pipeline(run_id: str) -> None:
                             )
                             await asyncio.sleep(backoff_seconds)
                     message = "Recovered after bounded exponential backoff with jitter."
-                sources = evidence_for(topic, domain)
-                if bool(run["inject_outage"]):
-                    status = "fallback"
-                    message = "Primary provider unavailable (503); circuit breaker routed to the cached archive."
+                if source_mode == "fixtures":
+                    sources = fixture_evidence_for(topic, domain)
+                    provider_statuses = [
+                        {"provider": "fixture", "label": "Demo fixtures", "status": "completed", "message": "3 illustrative records loaded"}
+                    ]
+                    if bool(run["inject_outage"]):
+                        status = "fallback"
+                        message = "Simulated provider outage; explicitly selected demo fixtures remain in use."
+                elif bool(run["inject_outage"]):
+                    sources = []
+                    provider_statuses = [
+                        {"provider": provider, "label": SOURCE_LABELS[provider], "status": "failed", "message": "Simulated provider outage"}
+                        for provider in selected_sources
+                    ]
+                    status = "failed"
+                    message = "Simulated provider outage; no fixture substitution was made."
+                else:
+                    sources, provider_statuses = await harvest_live(topic, selected_sources)
+                    if not sources:
+                        status = "failed"
+                        failures = "; ".join(
+                            f"{provider['label']}: {provider['message']}"
+                            for provider in provider_statuses
+                        )
+                        message = f"No live evidence was retrieved. {failures}"
+                    elif any(provider["status"] != "completed" for provider in provider_statuses):
+                        message = "Some selected providers did not return evidence; saved evidence is from successful providers only."
                 output = {
                     "sources": sources,
                     "sourceCount": len(sources),
-                    "provider": "cached archive" if status == "fallback" else "parallel source pool",
+                    "sourceMode": source_mode,
+                    "providerStatuses": provider_statuses,
+                    "provider": "demo fixtures" if source_mode == "fixtures" else "selected live sources",
                     "circuitBreaker": "open → fallback → healthy" if status == "fallback" else "closed",
                 }
             elif stage_number == 3:
-                sources = context.get("priorOutputs", {}).get("2", {}).get("sources", evidence_for(topic, domain))
+                sources = context.get("priorOutputs", {}).get("2", {}).get("sources", [])
                 output = {
                     "documentsProcessed": len(sources),
-                    "boilerplateRemoved": 38,
-                    "numericSignals": [
-                        {"metric": "source classes", "value": len(sources), "unit": "classes"},
-                        {"metric": "confidence range", "value": "0.82–0.94", "unit": "score"},
-                    ],
+                    "claimsExtracted": sum(bool(source.get("claim")) for source in sources),
                     "normalizedEvidence": sources,
-                    "semanticDensity": 0.81,
+                    "note": "Source text is stored as retrieved metadata or abstract excerpts; no unsupported metric extraction is inferred.",
                 }
             elif stage_number == 4:
+                sources = context.get("priorOutputs", {}).get("2", {}).get("sources", [])
                 output = {
-                    "claimsChecked": 3,
-                    "consensusScore": 0.88,
-                    "corroborated": [
-                        "Operational constraints should be explicitly validated.",
-                        "End-to-end p95 latency is more useful than isolated component timing.",
-                    ],
+                    "claimsChecked": len(sources),
+                    "corroborated": [],
                     "singleSourceCaveats": [
-                        "Published benchmark values vary with workload and environment; reproduce before committing to an SLO."
+                        {
+                            "claimId": source["claimId"],
+                            "message": "This record is a research lead, not independent corroboration of the claim.",
+                        }
+                        for source in sources
                     ],
+                    "note": "No cross-source consensus is claimed because independent claim alignment is not performed.",
                 }
             elif stage_number == 5:
+                sources = context.get("priorOutputs", {}).get("2", {}).get("sources", [])
                 output = {
-                    "executiveSummary": f"Evidence for {topic.rstrip('?')} points to a measured, failure-aware implementation: validate the operating envelope, compare complete request paths, and make recovery behavior observable.",
+                    "executiveSummary": (
+                        f"Retrieved {len(sources)} research records for “{topic}”. "
+                        "The cited titles and abstract excerpts are evidence leads; assess the linked publications "
+                        "and verify their methods before applying them to a technical decision."
+                    ),
                     "findings": [
-                        {"title": "Define the operating envelope", "detail": "Turn standards and workload assumptions into explicit acceptance criteria.", "metric": "3 evidence classes", "confidence": "High"},
-                        {"title": "Benchmark the full path", "detail": "Measure p50/p95 latency, throughput, and recovery under representative load.", "metric": "p95 + recovery", "confidence": "High"},
-                        {"title": "Keep recovery bounded", "detail": "Use capped retries, jitter, and a fallback that is safe to serve.", "metric": "3 attempts", "confidence": "Medium"},
+                        {
+                            "title": source["title"],
+                            "detail": source["claim"],
+                            "metric": f"{source['source']} · {source.get('claimKind', source['type'])}",
+                            "evidenceLabel": source.get("claimKind", "Source record"),
+                            "claimId": source["claimId"],
+                        }
+                        for source in sources
                     ],
                     "actionPlan": [
-                        {"period": "Days 1–7", "priority": "P1", "action": "Write a representative workload and baseline the complete request path."},
-                        {"period": "30-Day", "priority": "P1", "action": "Add bounded retries, circuit-breaker thresholds, and recovery telemetry."},
-                        {"period": "Quarterly", "priority": "P2", "action": "Re-run the benchmark against current dependencies and review stale assumptions."},
+                        {"period": "Before deciding", "priority": "P1", "action": "Open each cited source and check its methods, date, and fit to the question."},
+                        {"period": "For implementation", "priority": "P1", "action": "Validate relevant findings against your own workload and constraints."},
                     ],
                 }
             else:
                 dossier = context.get("priorOutputs", {}).get("5")
+                sources = context.get("priorOutputs", {}).get("2", {}).get("sources", [])
                 if not dossier:
                     dossier = {
-                        "executiveSummary": f"Evidence for {topic.rstrip('?')} supports validating the operating envelope, benchmarking the full path, and making recovery observable.",
+                        "executiveSummary": (
+                            f"Retrieved {len(sources)} research records for “{topic}”. "
+                            "Review the linked sources and validate their methods before applying them."
+                        ),
                         "findings": [
-                            {"title": "Define the operating envelope", "detail": "Document constraints and acceptance criteria from current evidence.", "metric": "3 source classes", "confidence": "High"},
-                            {"title": "Benchmark the full path", "detail": "Measure end-to-end latency and recovery under representative load.", "metric": "p95 + recovery", "confidence": "High"},
-                            {"title": "Make fallback behavior explicit", "detail": "Keep retries bounded and use a validated cached alternative.", "metric": "3 attempts", "confidence": "Medium"},
+                            {
+                                "title": source["title"],
+                                "detail": source["claim"],
+                                "metric": f"{source['source']} · {source.get('claimKind', source['type'])}",
+                                "evidenceLabel": source.get("claimKind", "Source record"),
+                                "claimId": source["claimId"],
+                            }
+                            for source in sources
                         ],
                         "actionPlan": [
-                            {"period": "Days 1–7", "priority": "P1", "action": "Establish the workload and current performance baseline."},
-                            {"period": "30-Day", "priority": "P1", "action": "Implement bounded recovery and alert on fallback use."},
-                            {"period": "Quarterly", "priority": "P2", "action": "Repeat benchmarks and revalidate operational assumptions."},
+                            {"period": "Before deciding", "priority": "P1", "action": "Check the methods, publication date, and fit of each linked source."},
+                            {"period": "For implementation", "priority": "P1", "action": "Validate relevant findings against your own workload and constraints."},
                         ],
                     }
                 else:
                     dossier = dict(dossier)
-                sources = context.get("priorOutputs", {}).get("2", {}).get("sources", evidence_for(topic, domain))
+                source_mode = context.get("sourceMode", "fixtures")
                 markdown = [
                     f"# DeepBrief: {topic}",
                     "",
@@ -521,28 +757,30 @@ async def run_pipeline(run_id: str) -> None:
                     "## Architectural findings",
                 ]
                 for item in dossier["findings"]:
-                    markdown.extend([f"### {item['title']}", item["detail"], f"**Signal:** {item['metric']} · **Confidence:** {item['confidence']}", ""])
+                    markdown.extend([f"### {item['title']}", item["detail"], f"**Signal:** {item['metric']} · **Evidence label:** {item['evidenceLabel']}", ""])
                 markdown.extend(["## Immediate action plan", "| Horizon | Priority | Action |", "|---|---|---|"])
                 for item in dossier["actionPlan"]:
                     markdown.append(f"| {item['period']} | {item['priority']} | {item['action']} |")
                 markdown.extend(["", "## Evidence sources"])
                 for source in sources:
-                    markdown.append(f"- **{source['source']}** — {source['title']} ({source['confidence']:.0%} confidence)")
-                markdown.extend(
-                    [
-                        "",
-                        "> This challenge build uses deterministic demo fixtures; it is not live external research.",
-                        "",
-                        "---",
-                        "Generated by DeepBrief. Evidence should be independently validated before production decisions.",
-                    ]
+                    markdown.append(
+                        f"- **{source['source']}** — [{source['title']}]({source['url']}) "
+                        f"(retrieved {source['retrievedAt']}; linked claim `{source['claimId']}`)"
+                    )
+                    markdown.append(f"  - {source['claim']}")
+                disclosure = (
+                    "This run uses explicitly selected deterministic demo fixtures. "
+                    "They are illustrative and are not live research results."
+                    if source_mode == "fixtures"
+                    else "Live search results are publication metadata and abstract excerpts. "
+                    "They are not independently verified or a substitute for reviewing the linked sources."
                 )
+                markdown.extend(["", f"> {disclosure}", "", "---", "Generated by DeepBrief."])
                 markdown_text = "\n".join(markdown) + "\n"
                 dossier["sources"] = sources
-                dossier["evidenceDisclosure"] = (
-                    "This challenge build uses deterministic demo source fixtures; "
-                    "claims and benchmark figures are illustrative, not live external research."
-                )
+                dossier["sourceMode"] = source_mode
+                dossier["providerStatuses"] = context.get("priorOutputs", {}).get("2", {}).get("providerStatuses", [])
+                dossier["evidenceDisclosure"] = disclosure
                 dossier["markdown"] = markdown_text
                 dossier["teamCard"] = {
                     "title": topic,
@@ -584,6 +822,14 @@ async def run_pipeline(run_id: str) -> None:
                     "completedStages": stage_number,
                 },
             )
+            if stage_number == 2 and status == "failed":
+                set_status(run_id, "failed")
+                save_event(
+                    run_id,
+                    "run_failed",
+                    {"runId": run_id, "message": message or "No live evidence was retrieved."},
+                )
+                return
 
         total_ms = max(1, round((time.perf_counter() - start) * 1000))
         finished = utc_now()
@@ -630,8 +876,9 @@ async def create_run(body: RunInput) -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO runs
-                (id, topic, status, created_at, updated_at, inject_rate_limit, inject_outage, crash_at_stage4)
-            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
+                (id, topic, status, created_at, updated_at, inject_rate_limit, inject_outage,
+                 crash_at_stage4, source_mode, source_selection_json)
+            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -641,6 +888,8 @@ async def create_run(body: RunInput) -> dict[str, Any]:
                 int(body.injectRateLimit),
                 int(body.injectOutage),
                 int(body.crashAtStage4),
+                body.sourceMode,
+                json.dumps(body.sources),
             ),
         )
         for number, (name, _) in enumerate(STAGES, start=1):

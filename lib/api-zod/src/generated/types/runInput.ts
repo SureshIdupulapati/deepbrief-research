@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { RunInputSourceMode } from './runInputSourceMode';
+import type { RunInputSourcesItem } from './runInputSourcesItem';
 
 export interface RunInput {
   /**
@@ -12,6 +14,12 @@ export interface RunInput {
      * @maxLength 280
      */
   topic: string;
+  sourceMode?: RunInputSourceMode;
+  /**
+     * @minItems 1
+     * @maxItems 2
+     */
+  sources?: RunInputSourcesItem[];
   injectRateLimit?: boolean;
   injectOutage?: boolean;
   crashAtStage4?: boolean;

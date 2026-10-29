@@ -5,14 +5,13 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ResearchDossier } from './researchDossier';
 import type { ResearchRun } from './researchRun';
-import type { RunDetailDossier } from './runDetailDossier';
 import type { StageCheckpoint } from './stageCheckpoint';
 
 export type RunDetail = ResearchRun & ({
   stages: StageCheckpoint[];
-  /** @nullable */
-  dossier?: RunDetailDossier;
+  dossier?: ResearchDossier | null;
   /** @nullable */
   verificationHash?: string | null;
 });

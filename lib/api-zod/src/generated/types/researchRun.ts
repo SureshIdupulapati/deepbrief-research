@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ResearchRunSourceMode } from './researchRunSourceMode';
+import type { ResearchRunSourcesItem } from './researchRunSourcesItem';
 import type { ResearchRunStatus } from './researchRunStatus';
 
 export interface ResearchRun {
@@ -21,4 +23,6 @@ export interface ResearchRun {
   injectRateLimit: boolean;
   injectOutage: boolean;
   crashAtStage4: boolean;
+  sourceMode: ResearchRunSourceMode;
+  sources: ResearchRunSourcesItem[];
 }

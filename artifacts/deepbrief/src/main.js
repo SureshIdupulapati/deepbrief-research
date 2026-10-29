@@ -5,9 +5,9 @@ const root = document.querySelector('#root');
 const stageNames = [
   'Input Normalizer & Intent Expansion',
   'Multi-Source Harvester',
-  'DOM Sanitizer & Content Distiller',
-  'Cross-Source Fact Corroborator',
-  'Intelligence Synthesizer',
+  'Evidence Normalizer',
+  'Claim Linkage & Caveat Review',
+  'Evidence-Led Summary',
   'Artifact Builder & Cryptographic Signer',
 ];
 const eventNames = [
@@ -24,6 +24,8 @@ const state = {
   stream: [],
   streamState: 'idle',
   topic: '',
+  sourceMode: 'live',
+  selectedSources: ['crossref', 'arxiv'],
   injectRateLimit: false,
   injectOutage: false,
   crashAtStage4: false,
@@ -143,14 +145,14 @@ function renderInspector(stage) {
 function renderDossier(dossier) {
   if (!dossier) {
     const detail = state.detail;
-  return `<div class="dossier-empty">${icon('file', 20)}<strong>${detail ? 'Dossier is being assembled' : 'Your verified brief will appear here'}</strong>${detail ? 'Evidence synthesis and final verification are still in progress.' : 'Completed research is rendered with its checkpoint trail and verification fingerprint.'}</div>`;
+    return `<div class="dossier-empty">${icon('file', 20)}<strong>${detail ? 'Research brief is being assembled' : 'Your research brief will appear here'}</strong>${detail ? 'Evidence synthesis and dossier integrity hash are still being prepared.' : 'Completed research is saved with its source trail, checkpoint history, and integrity hash.'}</div>`;
   }
   const findings = Array.isArray(dossier.findings) ? dossier.findings : [];
   const actions = Array.isArray(dossier.actionPlan) ? dossier.actionPlan : [];
   const sources = Array.isArray(dossier.sources) ? dossier.sources : [];
   return `<div class="dossier-top">
       <div><h2 class="section-title">Decision brief</h2><p class="section-note">${escapeHtml(state.detail.topic)}</p></div>
-      <span class="verified">${icon('check', 12)}${state.detail.status === 'completed' ? 'CONFIRMED' : escapeHtml(statusLabel(state.detail.status).toUpperCase())}</span>
+      <span class="verified">${icon('check', 12)}${state.detail.status === 'completed' ? 'RUN COMPLETE' : escapeHtml(statusLabel(state.detail.status).toUpperCase())}</span>
     </div>
     <div class="dossier-tools">
       <button type="button" data-action="copy">${icon('copy', 12)}Copy team card</button>
@@ -159,18 +161,25 @@ function renderDossier(dossier) {
     </div>
     <section class="summary-callout"><div class="inspect-label">Executive summary</div><p>${escapeHtml(dossier.executiveSummary ?? 'The executive summary is not available for this run.')}</p></section>
     ${findings.length ? `<section class="findings-section"><div class="inspect-label">Architectural findings</div><div class="findings-grid">${findings.map((item) => `<article class="finding-card">
-      <span class="finding-confidence">${escapeHtml(item.confidence)} confidence</span><h3>${escapeHtml(item.title)}</h3>
+      <span class="finding-confidence">${escapeHtml(item.evidenceLabel ?? item.confidence ?? 'Source record')}</span><h3>${escapeHtml(item.title)}</h3>
       <p>${escapeHtml(item.detail)}</p><strong>${escapeHtml(item.metric)}</strong>
     </article>`).join('')}</div></section>` : ''}
     ${actions.length ? `<section class="actions-section"><div class="inspect-label">Immediate action plan</div><div class="action-table-wrap"><table class="action-table">
       <thead><tr><th>Horizon</th><th>Priority</th><th>Action</th></tr></thead><tbody>${actions.map((item) => `<tr>
         <td>${escapeHtml(item.period)}</td><td><span class="priority-badge ${escapeHtml(String(item.priority).toLowerCase())}">${escapeHtml(item.priority)}</span></td>
         <td>${escapeHtml(item.action)}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
-    ${sources.length ? `<section class="sources-section"><div class="inspect-label">Evidence trail</div>${sources.map((source) => `<div class="source-row">
-      <span><strong>${escapeHtml(source.source)}</strong><small>${escapeHtml(source.title)}</small></span>
-      <span>${Math.round(Number(source.confidence) * 100)}% confidence</span></div>`).join('')}</section>` : ''}
+    ${dossier.providerStatuses?.length ? `<section class="sources-section"><div class="inspect-label">Selected provider status</div>${dossier.providerStatuses.map((provider) => `<div class="provider-status ${escapeHtml(provider.status)}">
+      <strong>${escapeHtml(provider.label)}</strong><span>${escapeHtml(provider.message)}</span></div>`).join('')}</section>` : ''}
+    ${sources.length ? `<section class="sources-section"><div class="inspect-label">Evidence trail · ${escapeHtml(dossier.sourceMode === 'fixtures' ? 'DEMO FIXTURES' : 'LIVE SOURCES')}</div>${sources.map((source) => `<article class="source-row">
+      <div class="source-main"><strong>${escapeHtml(source.source)} · ${escapeHtml(source.type)}</strong>
+        ${source.url?.startsWith('https://') && !source.url.includes('example.invalid')
+    ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title)}</a>`
+    : `<span class="source-title">${escapeHtml(source.title)}</span>`}
+        <small>Retrieved ${escapeHtml(formatDate(source.retrievedAt))} · Claim ${escapeHtml(source.claimId)}</small>
+        <p class="source-claim">${escapeHtml(source.claim)}</p></div>
+      </article>`).join('')}</section>` : ''}
     ${dossier.evidenceDisclosure ? `<p class="evidence-disclosure">${escapeHtml(dossier.evidenceDisclosure)}</p>` : ''}
-    ${state.detail.verificationHash ? `<div class="hash"><div class="inspect-label">Verification fingerprint</div>${escapeHtml(state.detail.verificationHash)}</div>` : ''}`;
+    ${state.detail.verificationHash ? `<div class="hash"><div class="inspect-label">Dossier integrity hash</div>${escapeHtml(state.detail.verificationHash)}</div>` : ''}`;
 }
 
 function render() {
@@ -183,10 +192,10 @@ function render() {
   root.innerHTML = `<div class="app-shell">
     <header class="topbar">
       <div class="brand" aria-label="DeepBrief workspace"><div class="brand-mark">${icon('branch', 16)}</div><div class="brand-name">deepbrief<span> / workspace</span></div></div>
-      <div class="top-right"><span data-testid="health-status"><i class="health-dot ${state.health === 'ok' ? '' : 'off'}"></i>${state.health === 'ok' ? 'Systems operational' : state.health === 'checking' ? 'Checking service' : 'Service unavailable'}</span><span class="top-label">SIMULATED SOURCE ARCHIVE</span></div>
+      <div class="top-right"><span data-testid="health-status"><i class="health-dot ${state.health === 'ok' ? '' : 'off'}"></i>${state.health === 'ok' ? 'Systems operational' : state.health === 'checking' ? 'Checking service' : 'Service unavailable'}</span><span class="top-label">${state.detail ? (state.detail.sourceMode === 'fixtures' ? 'DEMO FIXTURE RUN' : 'LIVE RESEARCH RUN') : (state.sourceMode === 'fixtures' ? 'DEMO FIXTURES' : 'LIVE RESEARCH')}</span></div>
     </header>
     <main class="workspace">
-      <div class="page-heading"><div><div class="eyebrow">Research operations · 01</div><h1>Technical research, made auditable.</h1><p class="heading-copy">Trace every source, checkpoint and recovery decision from question to verified brief.</p></div>
+      <div class="page-heading"><div><div class="eyebrow">Research operations · 01</div><h1>Technical research, made auditable.</h1><p class="heading-copy">Trace every source, checkpoint and recovery decision from question to research brief.</p></div>
       ${state.detail ? `<div class="run-id">RUN / ${escapeHtml(state.detail.id)}</div>` : ''}</div>
       <div class="content-grid">
         <section class="left-stack" aria-label="Research pipeline">
@@ -194,24 +203,32 @@ function render() {
             ${state.error ? `<div class="error-banner" role="alert">${escapeHtml(state.error)}<button class="link-btn" data-action="dismiss" type="button">Dismiss</button></div>` : ''}
             <form id="run-form"><div class="input-wrap"><input class="topic-input" name="topic" value="${escapeHtml(state.topic)}" maxlength="280" placeholder="e.g. Compare Raft and Paxos for geo-distributed metadata..." aria-label="Research question" data-testid="input-research-topic">
               <button class="submit-btn" type="submit" ${state.busy ? 'disabled' : ''} data-testid="button-start-run">${icon('play', 13)}${state.busy ? 'Starting' : 'Run research'}</button><span class="char-count">${state.topic.length}/280</span></div>
+              <div class="source-picker" aria-label="Research source selection">
+                <div class="source-picker-heading"><span>Evidence mode</span><small>Live mode never falls back to sample records</small></div>
+                <div class="source-mode-options">
+                  <button type="button" class="source-choice ${state.sourceMode === 'live' ? 'active' : ''}" data-source-mode="live" aria-pressed="${state.sourceMode === 'live'}">Live sources</button>
+                  <button type="button" class="source-choice ${state.sourceMode === 'fixtures' ? 'active' : ''}" data-source-mode="fixtures" aria-pressed="${state.sourceMode === 'fixtures'}">Demo fixtures</button>
+                </div>
+                ${state.sourceMode === 'live' ? `<div class="live-source-options"><label><input type="checkbox" data-source="crossref" ${state.selectedSources.includes('crossref') ? 'checked' : ''}>Crossref <small>Research publications</small></label><label><input type="checkbox" data-source="arxiv" ${state.selectedSources.includes('arxiv') ? 'checked' : ''}>arXiv <small>Research preprints</small></label></div>` : '<p class="demo-note">Fixture records are illustrative and are not live research results.</p>'}
+              </div>
               <div class="fault-row"><span class="fault-label">Resilience test</span>
                 ${toggleHtml('rate', state.injectRateLimit, 'Rate limit')}
                 ${toggleHtml('outage', state.injectOutage, 'Provider outage')}
                 ${toggleHtml('crash', state.crashAtStage4, 'Crash at stage 4')}
                 ${(state.injectRateLimit || state.injectOutage || state.crashAtStage4) ? '<span class="fault-warning">Fault injection enabled</span>' : ''}
-              </div><p class="demo-note">Demo mode: source records are fixtures, not live research results.</p>
+              </div>
             </form>
           </div>
           <div class="panel"><div class="graph-wrap"><div class="graph-topline"><h2 class="graph-title">Pipeline execution graph</h2><div class="graph-status"><span class="live-dot"></span>${escapeHtml(state.detail ? statusLabel(state.detail.status) : 'Ready for input')}</div></div>
             <div class="dag ${active ? 'is-active' : ''}" aria-label="Six-stage research pipeline">
               <svg class="dag-conduit" viewBox="0 0 1200 32" preserveAspectRatio="none" aria-hidden="true"><path class="conduit-base" d="M 95 16 H 1105"/><path class="conduit-active" d="M 95 16 H 1105"/></svg>
               ${stages.map(renderStageNode).join('')}
-            </div><div class="graph-foot"><div class="legend"><span class="legend-item"><i class="legend-swatch done"></i>Verified</span><span class="legend-item"><i class="legend-swatch active"></i>In progress</span><span class="legend-item"><i class="legend-swatch retry"></i>Recovery path</span></div><span>${state.detail ? `${state.detail.completedStages} / 6 checkpoints` : 'Six stages · click to inspect'}</span></div>
+            </div><div class="graph-foot"><div class="legend"><span class="legend-item"><i class="legend-swatch done"></i>Complete</span><span class="legend-item"><i class="legend-swatch active"></i>In progress</span><span class="legend-item"><i class="legend-swatch retry"></i>Recovery path</span></div><span>${state.detail ? `${state.detail.completedStages} / 6 checkpoints` : 'Six stages · click to inspect'}</span></div>
           </div></div>
           <div class="panel"><div class="panel-head"><div class="panel-title">${icon('sliders', 14)}Stage inspector</div><span class="panel-meta">${currentStage ? `CHECKPOINT ${String(currentStage.stage).padStart(2, '0')}` : 'NO CHECKPOINT SELECTED'}</span></div>${renderInspector(currentStage)}</div>
         </section>
         <aside class="right-stack">
-          <div class="panel"><div class="panel-head"><div class="panel-title">${icon('book', 14)}Verified dossier</div>${dossier ? '<span class="verified">VERIFIED</span>' : ''}</div>
+          <div class="panel"><div class="panel-head"><div class="panel-title">${icon('book', 14)}Research brief</div>${dossier ? '<span class="verified">SAVED</span>' : ''}</div>
             <div class="dossier">${state.detailLoading ? '<div class="history-loading"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>' : renderDossier(dossier)}
               ${state.detail?.status === 'paused' ? `<button class="resume-btn" style="margin-top:14px" data-action="resume" type="button" ${state.busy ? 'disabled' : ''}>${icon('retry', 12)}${state.busy ? 'Resuming…' : 'Resume from checkpoint'}</button>` : ''}
             </div>
@@ -251,6 +268,11 @@ function bindEvents() {
       render();
       return;
     }
+    if (state.sourceMode === 'live' && !state.selectedSources.length) {
+      state.error = 'Choose at least one live research source.';
+      render();
+      return;
+    }
     state.error = '';
     state.busy = true;
     render();
@@ -259,6 +281,8 @@ function bindEvents() {
         method: 'POST',
         body: JSON.stringify({
           topic,
+          sourceMode: state.sourceMode,
+          sources: state.selectedSources,
           injectRateLimit: state.injectRateLimit,
           injectOutage: state.injectOutage,
           crashAtStage4: state.crashAtStage4,
@@ -277,6 +301,17 @@ function bindEvents() {
   root.querySelectorAll('[data-toggle]').forEach((button) => button.addEventListener('click', () => {
     const key = { rate: 'injectRateLimit', outage: 'injectOutage', crash: 'crashAtStage4' }[button.dataset.toggle];
     state[key] = !state[key];
+    render();
+  }));
+  root.querySelectorAll('[data-source-mode]').forEach((button) => button.addEventListener('click', () => {
+    state.sourceMode = button.dataset.sourceMode;
+    render();
+  }));
+  root.querySelectorAll('[data-source]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+    const source = checkbox.dataset.source;
+    state.selectedSources = checkbox.checked
+      ? [...new Set([...state.selectedSources, source])]
+      : state.selectedSources.filter((selected) => selected !== source);
     render();
   }));
   root.querySelectorAll('[data-stage]').forEach((button) => button.addEventListener('click', () => {

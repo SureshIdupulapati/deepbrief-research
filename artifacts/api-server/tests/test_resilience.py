@@ -3,6 +3,8 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from urllib.error import URLError
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,6 +26,8 @@ class PipelineResilienceTests(unittest.TestCase):
         rate_limit: bool = False,
         outage: bool = False,
         crash: bool = False,
+        source_mode: str = "fixtures",
+        sources: list[str] | None = None,
     ) -> str:
         import uuid
 
@@ -34,8 +38,9 @@ class PipelineResilienceTests(unittest.TestCase):
                 """
                 INSERT INTO runs
                     (id, topic, status, created_at, updated_at,
-                     inject_rate_limit, inject_outage, crash_at_stage4)
-                VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
+                     inject_rate_limit, inject_outage, crash_at_stage4,
+                     source_mode, source_selection_json)
+                VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -45,6 +50,8 @@ class PipelineResilienceTests(unittest.TestCase):
                     int(rate_limit),
                     int(outage),
                     int(crash),
+                    source_mode,
+                    json.dumps(sources if sources is not None else []),
                 ),
             )
             for number, (name, _) in enumerate(api.STAGES, start=1):
@@ -115,8 +122,50 @@ class PipelineResilienceTests(unittest.TestCase):
 
         stage_two = self.stages(run_id)[1]
         self.assertEqual(stage_two["status"], "fallback")
-        self.assertEqual(stage_two["output"]["provider"], "cached archive")
+        self.assertEqual(stage_two["output"]["provider"], "demo fixtures")
+        self.assertEqual(stage_two["output"]["sourceMode"], "fixtures")
         self.assertEqual(api.read_run_row(run_id)["status"], "completed")
+
+    def test_live_evidence_provenance_and_claim_linkage_reach_dossier(self) -> None:
+        run_id = self.create_run(source_mode="live", sources=["crossref"])
+        record = {
+            "id": "crossref-1",
+            "source": "Crossref",
+            "provider": "crossref",
+            "type": "journal-article",
+            "title": "Reliable distributed systems",
+            "url": "https://doi.org/10.1234/example",
+            "retrievedAt": api.utc_now(),
+            "claimId": "claim-crossref-1",
+            "claim": "A publication abstract excerpt.",
+            "claimKind": "abstract",
+        }
+        with patch.dict(api.LIVE_SEARCHERS, {"crossref": lambda _topic: [record]}):
+            asyncio.run(api.run_pipeline(run_id))
+
+        detail = api.get_run_detail(run_id)
+        self.assertEqual(detail["status"], "completed")
+        dossier = detail["dossier"]
+        self.assertEqual(dossier["sourceMode"], "live")
+        self.assertEqual(dossier["sources"][0]["url"], record["url"])
+        self.assertEqual(dossier["sources"][0]["title"], record["title"])
+        self.assertEqual(dossier["sources"][0]["retrievedAt"], record["retrievedAt"])
+        self.assertEqual(dossier["findings"][0]["claimId"], record["claimId"])
+        self.assertIn(record["url"], dossier["markdown"])
+        self.assertNotIn("demo fixtures", dossier["evidenceDisclosure"].lower())
+
+    def test_live_provider_failure_fails_without_fixture_fallback(self) -> None:
+        run_id = self.create_run(source_mode="live", sources=["crossref"])
+        with patch.dict(api.LIVE_SEARCHERS, {"crossref": lambda _topic: (_ for _ in ()).throw(URLError("offline"))}):
+            asyncio.run(api.run_pipeline(run_id))
+
+        detail = api.get_run_detail(run_id)
+        stage_two = detail["stages"][1]
+        self.assertEqual(detail["status"], "failed")
+        self.assertEqual(stage_two["status"], "failed")
+        self.assertEqual(stage_two["output"]["sources"], [])
+        self.assertEqual(stage_two["output"]["providerStatuses"][0]["status"], "failed")
+        self.assertIsNone(detail["dossier"])
 
     def test_crash_resumes_without_losing_saved_stages(self) -> None:
         run_id = self.create_run(crash=True)

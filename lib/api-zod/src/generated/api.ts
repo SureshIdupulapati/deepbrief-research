@@ -31,7 +31,9 @@ export const ListRunsResponseItem = zod.object({
   "durationMs": zod.number().int().nullish(),
   "injectRateLimit": zod.boolean(),
   "injectOutage": zod.boolean(),
-  "crashAtStage4": zod.boolean()
+  "crashAtStage4": zod.boolean(),
+  "sourceMode": zod.enum(['live', 'fixtures']),
+  "sources": zod.array(zod.enum(['crossref', 'arxiv']))
 })
 export const ListRunsResponse = zod.array(ListRunsResponseItem)
 
@@ -42,10 +44,15 @@ export const ListRunsResponse = zod.array(ListRunsResponseItem)
 export const createRunBodyTopicMin = 8;
 export const createRunBodyTopicMax = 280;
 
+export const createRunBodySourceModeDefault = `live`;
+export const createRunBodySourcesMax = 2;
+
 
 
 export const CreateRunBody = zod.object({
   "topic": zod.string().min(createRunBodyTopicMin).max(createRunBodyTopicMax),
+  "sourceMode": zod.enum(['live', 'fixtures']).default(createRunBodySourceModeDefault),
+  "sources": zod.array(zod.enum(['crossref', 'arxiv'])).min(1).max(createRunBodySourcesMax).optional(),
   "injectRateLimit": zod.boolean().optional(),
   "injectOutage": zod.boolean().optional(),
   "crashAtStage4": zod.boolean().optional()
@@ -62,7 +69,9 @@ export const CreateRunResponse = zod.object({
   "durationMs": zod.number().int().nullish(),
   "injectRateLimit": zod.boolean(),
   "injectOutage": zod.boolean(),
-  "crashAtStage4": zod.boolean()
+  "crashAtStage4": zod.boolean(),
+  "sourceMode": zod.enum(['live', 'fixtures']),
+  "sources": zod.array(zod.enum(['crossref', 'arxiv']))
 })
 
 
@@ -84,7 +93,9 @@ export const GetRunResponse = zod.object({
   "durationMs": zod.number().int().nullish(),
   "injectRateLimit": zod.boolean(),
   "injectOutage": zod.boolean(),
-  "crashAtStage4": zod.boolean()
+  "crashAtStage4": zod.boolean(),
+  "sourceMode": zod.enum(['live', 'fixtures']),
+  "sources": zod.array(zod.enum(['crossref', 'arxiv']))
 }).and(zod.object({
   "stages": zod.array(zod.object({
   "stage": zod.number().int(),
@@ -97,7 +108,35 @@ export const GetRunResponse = zod.object({
   "resiliencePolicy": zod.string(),
   "message": zod.string().nullish()
 })),
-  "dossier": zod.record(zod.string(), zod.unknown()).nullish(),
+  "dossier": zod.union([zod.object({
+  "executiveSummary": zod.string(),
+  "findings": zod.array(zod.object({
+  "title": zod.string(),
+  "detail": zod.string(),
+  "claimId": zod.string()
+})),
+  "sources": zod.array(zod.object({
+  "id": zod.string(),
+  "source": zod.string(),
+  "provider": zod.string(),
+  "type": zod.string(),
+  "title": zod.string(),
+  "url": zod.string().url(),
+  "retrievedAt": zod.coerce.date(),
+  "claimId": zod.string(),
+  "claim": zod.string(),
+  "claimKind": zod.string().optional(),
+  "published": zod.union([zod.string(),zod.number().int()]).nullish()
+})),
+  "sourceMode": zod.enum(['live', 'fixtures']),
+  "providerStatuses": zod.array(zod.object({
+  "provider": zod.string(),
+  "label": zod.string(),
+  "status": zod.enum(['completed', 'failed', 'no_results']),
+  "message": zod.string()
+})),
+  "evidenceDisclosure": zod.string()
+}),zod.null()]).optional(),
   "verificationHash": zod.string().nullish()
 }))
 
@@ -120,7 +159,9 @@ export const ResumeRunResponse = zod.object({
   "durationMs": zod.number().int().nullish(),
   "injectRateLimit": zod.boolean(),
   "injectOutage": zod.boolean(),
-  "crashAtStage4": zod.boolean()
+  "crashAtStage4": zod.boolean(),
+  "sourceMode": zod.enum(['live', 'fixtures']),
+  "sources": zod.array(zod.enum(['crossref', 'arxiv']))
 })
 
 

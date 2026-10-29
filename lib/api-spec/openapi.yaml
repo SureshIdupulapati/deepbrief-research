@@ -146,6 +146,18 @@ components:
           type: string
           minLength: 8
           maxLength: 280
+        sourceMode:
+          type: string
+          enum: [live, fixtures]
+          default: live
+        sources:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum: [crossref, arxiv]
         injectRateLimit:
           type: boolean
         injectOutage:
@@ -182,7 +194,15 @@ components:
           type: boolean
         crashAtStage4:
           type: boolean
-      required: [id, topic, status, createdAt, updatedAt, completedStages, injectRateLimit, injectOutage, crashAtStage4]
+        sourceMode:
+          type: string
+          enum: [live, fixtures]
+        sources:
+          type: array
+          items:
+            type: string
+            enum: [crossref, arxiv]
+      required: [id, topic, status, createdAt, updatedAt, completedStages, injectRateLimit, injectOutage, crashAtStage4, sourceMode, sources]
     StageCheckpoint:
       type: object
       properties:
@@ -218,9 +238,84 @@ components:
               items:
                 $ref: "#/components/schemas/StageCheckpoint"
             dossier:
-              type: ["object", "null"]
-              additionalProperties: true
+              anyOf:
+                - $ref: "#/components/schemas/ResearchDossier"
+                - type: "null"
             verificationHash:
               type: ["string", "null"]
           required: [stages]
+    EvidenceRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+        provider:
+          type: string
+        type:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+          format: uri
+        retrievedAt:
+          type: string
+          format: date-time
+        claimId:
+          type: string
+        claim:
+          type: string
+        claimKind:
+          type: string
+        published:
+          type: ["string", "integer", "null"]
+      required: [id, source, provider, type, title, url, retrievedAt, claimId, claim]
+    ProviderStatus:
+      type: object
+      properties:
+        provider:
+          type: string
+        label:
+          type: string
+        status:
+          type: string
+          enum: [completed, failed, no_results]
+        message:
+          type: string
+      required: [provider, label, status, message]
+    ResearchDossier:
+      type: object
+      properties:
+        executiveSummary:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              detail:
+                type: string
+              claimId:
+                type: string
+            required: [title, detail, claimId]
+            additionalProperties: true
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceRecord"
+        sourceMode:
+          type: string
+          enum: [live, fixtures]
+        providerStatuses:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderStatus"
+        evidenceDisclosure:
+          type: string
+      required: [executiveSummary, findings, sources, sourceMode, providerStatuses, evidenceDisclosure]
+      additionalProperties: true
 

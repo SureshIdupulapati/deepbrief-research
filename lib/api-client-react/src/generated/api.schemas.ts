@@ -9,12 +9,34 @@ export interface HealthStatus {
   status: string;
 }
 
+export type RunInputSourceMode = typeof RunInputSourceMode[keyof typeof RunInputSourceMode];
+
+
+export const RunInputSourceMode = {
+  live: 'live',
+  fixtures: 'fixtures',
+} as const;
+
+export type RunInputSourcesItem = typeof RunInputSourcesItem[keyof typeof RunInputSourcesItem];
+
+
+export const RunInputSourcesItem = {
+  crossref: 'crossref',
+  arxiv: 'arxiv',
+} as const;
+
 export interface RunInput {
   /**
      * @minLength 8
      * @maxLength 280
      */
   topic: string;
+  sourceMode?: RunInputSourceMode;
+  /**
+     * @minItems 1
+     * @maxItems 2
+     */
+  sources?: RunInputSourcesItem[];
   injectRateLimit?: boolean;
   injectOutage?: boolean;
   crashAtStage4?: boolean;
@@ -31,6 +53,22 @@ export const ResearchRunStatus = {
   failed: 'failed',
 } as const;
 
+export type ResearchRunSourceMode = typeof ResearchRunSourceMode[keyof typeof ResearchRunSourceMode];
+
+
+export const ResearchRunSourceMode = {
+  live: 'live',
+  fixtures: 'fixtures',
+} as const;
+
+export type ResearchRunSourcesItem = typeof ResearchRunSourcesItem[keyof typeof ResearchRunSourcesItem];
+
+
+export const ResearchRunSourcesItem = {
+  crossref: 'crossref',
+  arxiv: 'arxiv',
+} as const;
+
 export interface ResearchRun {
   id: string;
   topic: string;
@@ -45,6 +83,8 @@ export interface ResearchRun {
   injectRateLimit: boolean;
   injectOutage: boolean;
   crashAtStage4: boolean;
+  sourceMode: ResearchRunSourceMode;
+  sources: ResearchRunSourcesItem[];
 }
 
 export type StageCheckpointStatus = typeof StageCheckpointStatus[keyof typeof StageCheckpointStatus];
@@ -85,15 +125,65 @@ export interface StageCheckpoint {
   message?: string | null;
 }
 
-/**
- * @nullable
- */
-export type RunDetailDossier = { [key: string]: unknown } | null;
+export interface EvidenceRecord {
+  id: string;
+  source: string;
+  provider: string;
+  type: string;
+  title: string;
+  url: string;
+  retrievedAt: string;
+  claimId: string;
+  claim: string;
+  claimKind?: string;
+  /** @nullable */
+  published?: string | number | null;
+}
+
+export type ResearchDossierSourceMode = typeof ResearchDossierSourceMode[keyof typeof ResearchDossierSourceMode];
+
+
+export const ResearchDossierSourceMode = {
+  live: 'live',
+  fixtures: 'fixtures',
+} as const;
+
+export type ProviderStatusStatus = typeof ProviderStatusStatus[keyof typeof ProviderStatusStatus];
+
+
+export const ProviderStatusStatus = {
+  completed: 'completed',
+  failed: 'failed',
+  no_results: 'no_results',
+} as const;
+
+export interface ProviderStatus {
+  provider: string;
+  label: string;
+  status: ProviderStatusStatus;
+  message: string;
+}
+
+export type ResearchDossierFindingsItem = {
+  title: string;
+  detail: string;
+  claimId: string;
+  [key: string]: unknown;
+ };
+
+export interface ResearchDossier {
+  executiveSummary: string;
+  findings: ResearchDossierFindingsItem[];
+  sources: EvidenceRecord[];
+  sourceMode: ResearchDossierSourceMode;
+  providerStatuses: ProviderStatus[];
+  evidenceDisclosure: string;
+  [key: string]: unknown;
+ }
 
 export type RunDetail = ResearchRun & ({
   stages: StageCheckpoint[];
-  /** @nullable */
-  dossier?: RunDetailDossier;
+  dossier?: ResearchDossier | null;
   /** @nullable */
   verificationHash?: string | null;
 });
